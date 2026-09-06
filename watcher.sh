@@ -2,9 +2,9 @@
 # Generic build-and-run watcher. Copy into a project and edit TARGETS.
 #
 # K&R: every .c file is its own program (bin/<name>). `all` builds them all,
-# so a broken exercise shows up immediately; RUN names the one to execute
-# after a successful build -- change it as you move between exercises, or
-# run ./watcher.sh -t to only build.
+# so a broken exercise shows up immediately; the one executed afterwards is
+# the .c file most recently saved (see RUN below), or run ./watcher.sh -t to
+# only build.
 #
 # Each TARGET is  name | make target | run command [| guard]. The run
 # command may be empty (build only); the optional guard is a command that
@@ -22,14 +22,21 @@
 # repo (inotifywait; pacman -S inotify-tools).
 
 # ---- per-project config ----------------------------------------------------
-RUN=main   # which program the prod target runs after building
+# Textbook mode: which exercise the prod target runs after building. Defaults
+# to the most recently edited .c file (or RUN=1-20 ./watcher.sh to pick one)
+# and is retargeted on every pass to whatever .c file was just saved, so
+# moving between exercises needs no restart. `make run` feeds <name>.in on
+# stdin if present and kills a program that runs longer than TIMEOUT. The \$ keeps $RUN literal here so it is expanded when the
+# command runs; the Emacs build hook substitutes the saved file's stem for it.
+RUN=${RUN:-$(ls -t *.c 2>/dev/null | head -1)}; RUN=${RUN%.c}; export RUN
 TARGETS=(
-    "prod | all | if [ -x bin/$RUN ]; then echo \"--- ./$RUN ---\"; ./bin/$RUN; else echo \"(no bin/$RUN -- set RUN= in watcher.sh)\"; fi"
+    "prod | all | make -s run FILE=\$RUN"
     "test | all | true"
 )
-# Files the build itself writes; changes to these must not retrigger. `tags`
-# is rewritten by nvim's ctags hook on every save.
-IGNORE='(^|/)(bin|tags)(/|$)|\.(o|swp)$|~$'
+# Files the build itself writes, plus editor droppings, none of which may
+# retrigger: `tags` from a ctags hook, `~` backups and `.swp` from vim, and
+# Emacs' `.#name` lock symlinks and `#name#` autosaves.
+IGNORE='(^|/)(bin|tags)(/|$)|\.(o|swp)$|~$|(^|/)\.?#'
 # ---------------------------------------------------------------------------
 
 log=${TMPDIR:-/tmp}/watcher-$(basename "$PWD").log
@@ -112,6 +119,9 @@ run_pass() {
     # The header is the proof a build ran: id, wall-clock time, what
     # triggered it, and the newest source mtime it built from.
     echo "### $build_id  $(date +%H:%M:%S)  $why  [newest source: $(newest_source)]"
+    # Saved a .c or its .in? That's the exercise being worked on -- run it.
+    [[ $why == *.c && -f $why ]] && RUN=${why%.c}
+    [[ $why == *.in && -f $why ]] && RUN=${why%.in}
     for t in "${TARGETS[@]}"; do
         IFS='|' read -r name mk cmd guard <<<"$t"
         name=${name// /}; mk=${mk// /}
